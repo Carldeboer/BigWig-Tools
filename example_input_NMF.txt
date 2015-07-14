@@ -1,0 +1,22 @@
+#id	file	smoothSD	isOpen?	defaultValue	log?	startingMean
+#id: identifier for plots
+#file: full path to big wig
+#smoothSD: SD for gaussian smoothing
+#isOpen?: -1 if this is anticorrelated with accessibility, 1 for positive
+#defaultValue: what to replace missing values with in data
+#log?: <0 to not log transform, 0 or more adds that value to the data and then log10 transforms it
+#MNase1	/path/to/files/genomes/sc/20110203_R64/Ramachandran_2014_GR/GSM1438794_MnaseSeq_1.bw	0	1	0	0.5
+#MNase2	/path/to/files/genomes/sc/20110203_R64/Ramachandran_2014_GR/GSM1438795_MnaseSeq_2.bw	0	1	0	0.5
+#MNase3	/path/to/files/genomes/sc/20110203_R64/Ramachandran_2014_GR/GSM1438796_MnaseSeq_3.bw	0	1	0	0.5
+MNase4	/path/to/files/genomes/sc/20110203_R64/Ramachandran_2014_GR/GSM1438797_MnaseSeq_4.bw	0	1	0	1
+MNase5	/path/to/files/genomes/sc/20110203_R64/Ramachandran_2014_GR/GSM1438798_MnaseSeq_5.bw	0	1	0	1
+SonoSeq1	/path/to/files/genomes/sc/20110203_R64/Kasinathan_2014_ORGANIC/yeast_sono_seq_1.bw	0	1	0	1
+SonoSeq2	/path/to/files/genomes/sc/20110203_R64/Kasinathan_2014_ORGANIC/yeast_sono_seq_2.bw	0	1	0	1
+Zhang_invivo_nuc	/path/to/files/genomes/sc/20110203_R64/Zhang_Pugh_2011/in-vivo_merged.bw	20	-1	0	-1
+Brogaard_nuc	/path/to/files/genomes/sc/20110203_R64/Brogaard_2012/allReads_start_bothStrands.bw	20	-1	0	-1
+Schep_Nucl_A	/path/to/files/genomes/sc/20110203_R64/Schep_2015_BioRxiv/A.occ.arabic.bw	0	-1	0	-1
+#Schep_Nucl_B	/path/to/files/genomes/sc/20110203_R64/Schep_2015_BioRxiv/B.occ.arabic.bw	0	-1	0	-1
+Schep_Nucl_C	/path/to/files/genomes/sc/20110203_R64/Schep_2015_BioRxiv/C.occ.arabic.bw	0	-1	0	-1
+Schep_Nucl_D	/path/to/files/genomes/sc/20110203_R64/Schep_2015_BioRxiv/D.occ.arabic.bw	0	-1	0	-1
+Schep_Nucl_E	/path/to/files/genomes/sc/20110203_R64/Schep_2015_BioRxiv/E.occ.arabic.bw	0	-1	0	-1
+#Schep_Nucl_F	/path/to/files/genomes/sc/20110203_R64/Schep_2015_BioRxiv/F.occ.arabic.bw	0	-1	0	-1

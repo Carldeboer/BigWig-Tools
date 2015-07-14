@@ -1,0 +1,8 @@
+#id	file	smoothSD	defaultValue	log?
+#id: identifier for plots
+#file: full path to big wig
+#smoothSD: SD for gaussian smoothing
+#defaultValue blanks are filled in with this
+#log? -1 for no log, otherwise add this to the data and take log
+MNase4	/home/unix/cgdeboer/genomes/sc/20110203_R64/Ramachandran_2014_GR/GSM1438797_MnaseSeq_4.bw	0	0	-1
+MNase5	/home/unix/cgdeboer/genomes/sc/20110203_R64/Ramachandran_2014_GR/GSM1438798_MnaseSeq_5.bw	0	0	-1
