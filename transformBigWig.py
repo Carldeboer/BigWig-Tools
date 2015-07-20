@@ -5,7 +5,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description='This program takes a BW file as input and applies one or more provided mathematical operations to the data, in the order provided.')
 parser.add_argument('-i',dest='inBW',	metavar='<inBigWig>',help='Input bigwig file to translate', required=True);
-parser.add_argument('-f',dest='functions',	metavar='<functions>',help='Functions to apply to data\n  One or more of {log(2|10)|[+-^*/]<num>|smooth<SD>|exp|pow<num>|default<num>}; separated by commas. \n  log(2|10|) = apply log2, log10, or natural log;\n  [+-*/^]<num> = <data> <operation> <num>, where ^ is the exponent operator;\n  smoothG<num> = gaussian smooth, SD = <num>;\n  exp = e^data; \n  smoothU<num> = uniform (sliding window) smoothing with window = <num>;\n  smoothZ<num> = transform to Z scores, with SD and mean defined over window <num>/2 to either side of datum;\n  pow<num> = <num>^data;\n  default<num> = replace missing values with <num>;', required=True);
+parser.add_argument('-f',dest='functions',	metavar='<functions>',help='Functions to apply to data\n  One or more of {log(2|10)|[+-^*/]<num>|(>=|<=|<|>|==|!=)<num>|smooth<SD>|exp|pow<num>|default<num>}; separated by commas. \n  log(2|10|) = apply log2, log10, or natural log;\n  [+-*/^]<num> = <data> <operation> <num>, where ^ is the exponent operator;\n  (>=|<=|<|>|==|!=)<num> = inequalities, thereby turning the data into 1s and 0s;\n  smoothG<num> = gaussian smooth, SD = <num>;\n  exp = e^data; \n  smoothU<num> = uniform (sliding window) smoothing with window = <num>;\n  smoothZ<num> = transform to Z scores, with SD and mean defined over window <num>/2 to either side of datum;\n  pow<num> = <num>^data;\n  default<num> = replace missing values with <num>;', required=True);
 parser.add_argument('-c',dest='chrsFile',	metavar='<chromSizesFile>',help='Input file containing the chromsome sizes: chr\\tsize\\n', required=True);
 parser.add_argument('-o',dest='outFP', metavar='<outFilePath>',help='Where to output results', required=True);
 parser.add_argument('-l',dest='logFP', metavar='<logFile>',help='Where to output messages', required=False);
@@ -127,6 +127,20 @@ def applyFunction(data,f):
 	elif re.match("^exp$",f):
 		return np.exp(data);
 	else: 
+		m = re.match("^([<>=!]+)([-.eE0-9]+)$",f);
+		if m:
+			if m.group(1)=="<=":
+				return (data<=float(m.group(2))).astype(int);
+			elif m.group(1)==">=":
+				return (data>=float(m.group(2))).astype(int);
+			elif m.group(1)=="<":
+				return (data<float(m.group(2))).astype(int);
+			elif m.group(1)==">":
+				return (data>float(m.group(2))).astype(int);
+			elif m.group(1)=="!=":
+				return (data!=float(m.group(2))).astype(int);
+			elif m.group(1)=="==":
+				return (data==float(m.group(2))).astype(int);
 		m = re.match("^([\^\*\+\-\/])([-.eE0-9]+)$",f);
 		if m:
 			if m.group(1)=="^":

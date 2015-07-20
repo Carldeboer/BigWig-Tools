@@ -3,7 +3,7 @@
 #!/home/unix/cgdeboer/bin/python3
 
 
-#import sys; sys.argv= "findCopyNumber.py  -i example_input_CopyNumber.txt -o test_CNV -c /home/unix/cgdeboer/genomes/sc/20110203_R64/chrom.sizes -s 1 -v -v -v -w".split();
+#import sys; sys.argv= "findCopyNumber.py  -i example_input_CopyNumber.txt -o test_CNV -c /home/unix/cgdeboer/genomes/sc/20110203_R64/chrom.sizes -x -300 -b 0.001 -s 1 -v -v -v -w".split();
 
 import argparse
 parser = argparse.ArgumentParser(description='This program takes GB tracks as input and decomposes them using either PCA or NMF, outputting the components.')
@@ -14,8 +14,10 @@ parser.add_argument('-l',dest='logFP', metavar='<logFile>',help='Where to output
 parser.add_argument('-s',dest='sample', metavar='<sampleSpacing>',help='The spacing of data points to use (e.g. take one every X bp) [default=100]', required=False, default = 100);
 parser.add_argument('-t',dest='iterations', metavar='<numIterations>',help='The number of iterations of ML-reestimation [default=10]', required=False, default = 10);
 parser.add_argument('-p',dest='ploidy', metavar='<defaultPloidy>',help='The default ploidy (usually 1 for haploid, 2 for diploid) [default=1]', required=False,default=1);
-parser.add_argument('-x',dest='transition', metavar='<log10TransitionP>',help='The log10(P(transition)) between states [default=-10]', required=False,default=-10);
-parser.add_argument('-d',dest='dim', metavar='<graphDim>',help='Inches per graph [default=3]', required=False, default = 3);
+parser.add_argument('-x',dest='transition', metavar='<log10TransitionP>',help='The log10(P(transition)) between states [default=-100]; more negative is more conservative (calls fewer CNVs) - more resolution (lower -s <sample>) requires a more negative transition', required=False,default=-100);
+parser.add_argument('-b',dest='fractionBG', metavar='<backgroundAlignmentPct>',help='the fraction of the covariance of the standard ploidy state to use for the null state (no copies) - shouldn\'t be 0 since reads may align by chance [default=0.001]', required=False,default=0.001);
+#parser.add_argument('-d',dest='dim', metavar='<graphDim>',help='Inches per graph [default=3]', required=False, default = 3);
+parser.add_argument('-z',dest='scalePDF', action='count',help='Scale the state PDFs to have a max of 1; this has the effect of making variance less important than means and often results in a larger number of more specific states.', required=False, default=0);
 parser.add_argument('-e',dest='eliminateMissing', action='count',help='eliminate base pairs with missing values; often, these represent 0s, so this is not always appropriate', required=False, default=0);
 parser.add_argument('-w',dest='wigs', action='count',help='Output to wigs first? Useful if RAM is limiting.  Sometimes wigToBigWig gets killed for it and its less RAM intensive to convert everything at the end', required=False, default=0);
 parser.add_argument('-v',dest='verbose', action='count',help='Verbose output?', required=False, default=0);
@@ -30,21 +32,23 @@ from  hmmlearn.hmm import GaussianHMM;
 import numpy as np
 import scipy as sp
 from scipy.ndimage.filters import gaussian_filter;
-#from scipy.stats import multivariate_normal;
+from scipy.stats import multivariate_normal;
 #from scipy.stats import boxcox;
 #from scipy import linalg
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from sklearn import decomposition
+#from sklearn import decomposition
 import sys
 from bx.intervals.io import GenomicIntervalReader
 from bx.bbi.bigwig_file import BigWigFile
 
 args.sample = int(args.sample);
-args.dim = float(args.dim);
+#args.dim = float(args.dim);
 args.iterations = int(args.iterations);
-args.transition = int(args.transition);
+args.fractionBG = float(args.fractionBG);
+args.transition = float(args.transition);
+args.ploidy = int(args.ploidy);
 
 
 if (args.logFP is not None):
@@ -178,32 +182,44 @@ covAll = np.cov(allDataCat,rowvar=0);
 meanAll = np.mean(allDataCat,axis=0);
 
 #2. Define three (or two for haploid) state HMM with means equal to mean, mean/2, and mean*1.5 (or just mean, mean*2 for haploid), user-defined transition probability
-numStates = args.ploidy+2
+stateIsToCNVs = range(0,(args.ploidy+2))
+numStates = len(stateIsToCNVs)
 stateMeans = [0]*numStates;
 stateCovs = [0]*numStates;
-stateIsToCNVs = [];
+statePDFMaxima = [0]*numStates;
 cnvsToStateIs = {};
-for i in range(0,numStates):
+for i in range(0,numStates): #assume poisson, where mean is lambda and variance is also lambda
 	stateMeans[i] = float(i)/args.ploidy *meanAll;
-	stateCovs[i] = covAll;
-	stateIsToCNVs.append(i);
+	if i==0:
+		stateCovs[i] = covAll * args.fractionBG/args.ploidy; # since if the variance is 0, the probability of observing anything but the mean (0) is 0
+	else:
+		stateCovs[i] = covAll * float(i)/args.ploidy;
 	cnvsToStateIs[i]=i
+	statePDFMaxima[i]=np.log(multivariate_normal.pdf(x=stateMeans[i],mean=stateMeans[i],cov=stateCovs[i]))
 
-
+cnvsToStateIs0=cnvsToStateIs;
+stateIsToCNVs0 = stateIsToCNVs;
 if len(IDs)==1:
 	stateCovs = np.expand_dims(stateCovs,1)
 
-### make transmat
-transitionMatrix = np.add(np.eye(numStates)*(1-(numStates-1)*10**args.transition),(1-np.eye(numStates))*10**args.transition);
 
 #model = GaussianHMM(len(states),covariance_type="full",n_iter=1);
 model = GaussianHMM(numStates,covariance_type="full", n_iter=1);
 ###insert my own params
 model.means_ = stateMeans;
 model.covars_ = stateCovs;
-model.transmat=transitionMatrix;
 
+### make transmat
+if args.transition <= -100:
+	transitionMatrix = (1-np.eye(numStates))*args.transition*np.log(10);
+	model._log_transmat =transitionMatrix;
+else:
+	transitionMatrix = np.add(np.eye(numStates)*(1-(numStates-1)*10**args.transition),(1-np.eye(numStates))*10**args.transition);
+	model._set_transmat(transitionMatrix);
 
+if args.verbose>0: sys.stderr.write(np.array_str(model._log_transmat)+"\n");
+
+#exit;
 meanNormal = meanAll;
 normalState = cnvsToStateIs[args.ploidy];
 lastClass = {};
@@ -215,14 +231,17 @@ for i in range(0,args.iterations):
 	warned=False;
 	if args.verbose>1: sys.stderr.write("  Iteration %i.\n"%(i));
 	viterbi = {}
-	noChange=False;
+	noChange=0;
 	viterbiCat =np.zeros(allDataCat.shape[0]);
 	curTot=0;
-	curNumCNVs
+	curNumCNVs=0;
 	for chr in chrOrder:
 		#3. Calculate Viterbi path given data
 		if args.verbose>2: sys.stderr.write("    i=%i; Calculating Viterbi path for %s.\n"%(i,chr));
-		viterbi[chr] = model.predict(allData[chr]);
+		framelogprob = model._compute_log_likelihood(allData[chr])
+		if args.scalePDF>0:
+			framelogprob = np.subtract(framelogprob,statePDFMaxima) #### This requires some explanation.  See Note 1 below. 
+		logprob, viterbi[chr] = model._do_viterbi_pass(framelogprob);
 		curLen = len(viterbi[chr]);
 		#4. For each non-standard state, calculate the mean in that state and add a state with a mean representing that ploidy
 		changeStart=-1
@@ -230,55 +249,83 @@ for i in range(0,args.iterations):
 		for j in range(1,len(viterbi[chr])):
 			if viterbi[chr][j]!=viterbi[chr][j-1]:#there was a change
 				if changeStart==-1:
+					if viterbi[chr][j]==normalState:
+						raise Exception("new state is normal ploidy state");
 					changeStart=j;
 				else: #from changeStart to j-1
-					curNumCNVs+=1;
 					#calculate the means of this region
 					localMean = np.mean(allData[chr][changeStart:j,:],axis=0);
 					#figure out the local CN as the local means divided by the global means, rounded to the nearest logical ploidy
 					meanRatio = np.divide(localMean,meanNormal);
 					localPloidy = np.mean(meanRatio*args.ploidy);
-					if args.verbose>2: sys.stderr.write("    Local ploidy for %s (%i:%i)*%i equal to %f (rounded to %i).\n"%(chr,changeStart,j-1,args.sample,localPloidy,int(np.round(localPloidy))));
+					if args.verbose>2: sys.stderr.write("      Local ploidy for %s:%i-%i i=(%i-%i)*%i (len=%ibp) better fit by %i, empirically equal to %f (rounded to %i).\n"%(chr,changeStart*args.sample,(j-1)*args.sample,changeStart,j-1,args.sample,(j-changeStart)*args.sample,stateIsToCNVs[viterbi[chr][j-1]],localPloidy,int(np.round(localPloidy))));
 					#re-assign viterbi to have be this (potentially new) state
 					localPloidy = int(np.round(localPloidy));
 					if localPloidy==args.ploidy and not warned:
 						warned=True;
 						sys.stderr.write("WARNING: Local ploidy rounds to global ploidy; transition log-probability (%f) is probably too high\n"%(args.transition));
+					else: 
+						curNumCNVs+=1;
 					if localPloidy not in cnvsToStateIs:
 						cnvsToStateIs[localPloidy]=numStates;
 						stateIsToCNVs.append(localPloidy);
 						numStates+=1;
 					viterbi[chr][changeStart:j]=cnvsToStateIs[localPloidy];
 					changeStart=-1;	
+					if viterbi[chr][j]!=normalState:
+						changeStart=j;
 		viterbi[chr] = viterbi[chr][1:len(viterbi[chr])-1] #remove the initial and terminal normalState
+		#if args.verbose>1: sys.stderr.write("    merging revised viterbi with the rest: curTot=%i, curLen=%i, viterbi[chr].shape=%i, replacing %i:%i/%i.\n"%(curTot, curLen, viterbi[chr].shape[0], curTot, (curTot+curLen),allDataCat.shape[0]));
 		viterbiCat[curTot:(curTot+curLen)] = viterbi[chr];
 		curTot=curTot+curLen;
-		noChange = noChange and np.all(viterbi[chr]==lastClass[chr]);
+		noChange = noChange + np.sum(viterbi[chr]!=lastClass[chr]);
 		lastClass[chr]=viterbi[chr]#update
-	if noChange: #no chr was updated
-		break;
-	#5. Re-calculate the means and SDs of each state given the viterbi path
+	#5. Re-calculate the means and SDs of each state given the revised viterbi path
+	usedStates = np.unique(np.append(np.array([0,1]),np.unique(viterbiCat))).astype(int);
+	numStates = len(usedStates);
+	sys.stderr.write("Last iteration had %i CNVs and changed at %i positions; now have %i CNV states\n"%(curNumCNVs, noChange, numStates));
+	#if noChange==0: #no chr was updated
+	#	break;
+	#redefine standard ploidy
 	meanNormal = np.mean(allDataCat[viterbiCat==cnvsToStateIs[args.ploidy],:],axis=0)
 	covNormal = np.cov(allDataCat[viterbiCat==cnvsToStateIs[args.ploidy],:],rowvar=0)
+	#reset states and remove unused states
+	cnvsToStateIsNew = {};
+	stateIsToCNVsNew =[0]*numStates;
+	for s in range(0,numStates):
+		cnvsToStateIsNew[stateIsToCNVs[usedStates[s]]]=s;
+		stateIsToCNVsNew[s]=stateIsToCNVs[usedStates[s]];
+	cnvsToStateIs=cnvsToStateIsNew;
+	stateIsToCNVs =stateIsToCNVsNew;
 	stateMeans = [0]*numStates;
 	stateCovs = [0]*numStates;
+	statePDFMaxima = [0]*numStates;
 	for s in range(0,numStates):
 		stateMeans[s] = meanNormal*(float(stateIsToCNVs[s])/args.ploidy);
-		if np.sum(viterbiCat==s)<3:
+		if np.sum(viterbiCat==s)<3: # too few examples to estimate covar ## sometimes estimating the covariance emperically leads to some weird states defined more by covariance than anything else.
+			# it appears to be better to estimate this from the empirical covariance (else, below) rather than the CNV* standard covariance as here
+			if float(stateIsToCNVs[s])==0:
+				stateCovs[s] = covNormal * args.fractionBG/args.ploidy; # since if the variance is 0, the probability of observing anything but the mean (0) is 0
+			else:
+				stateCovs[s] = covNormal * float(stateIsToCNVs[s])/args.ploidy;
 			stateCovs[s] = covNormal;
 		else:
-			stateCovs[s] = np.cov(allDataCat[viterbiCat==s,:],rowvar=0)
+			stateCovs[s] = np.cov(allDataCat[viterbiCat==usedStates[s],:],rowvar=0)
+		statePDFMaxima[s]=np.log(multivariate_normal.pdf(x=stateMeans[s],mean=stateMeans[s],cov=stateCovs[s]))
 	model = GaussianHMM(numStates,covariance_type="full", n_iter=1);
-	transitionMatrix = np.add(np.eye(numStates)*(1-(numStates-1)*10**args.transition),(1-np.eye(numStates))*10**args.transition);
-	model.transmat=transitionMatrix;
+	if args.transition <= -100:
+		transitionMatrix = (1-np.eye(numStates))*args.transition*np.log(10);
+		model._log_transmat =transitionMatrix;
+	else:
+		transitionMatrix = np.add(np.eye(numStates)*(1-(numStates-1)*10**args.transition),(1-np.eye(numStates))*10**args.transition);
+		model._set_transmat(transitionMatrix);
 	model.means_ = stateMeans;
 	model.covars_ = stateCovs;
-	#6. Repeat steps 3-6 until convergence (E-M)
 
 
 
 
-sys.stderr.write("Finished in %i/%i iterations, yielding %i CNVs\n",%(i+1, args.iterations, curNumCNVs));
+sys.stderr.write("Finished in %i/%i iterations, yielding %i CNVs\n"%(i+1, args.iterations, curNumCNVs));
 
 sys.stderr.write("Making output streams\n");
 
@@ -331,3 +378,17 @@ else: #streams are pipes to wigToBigWig
 
 if (args.logFP is not None):
 	logFile.close();
+
+
+### Note 1
+# A PDF retruns the probability of observing the data for a given distribution.  Indeed, this is what is returned to framelogprob.
+# This means that the maximum value of the function depends on the variance.  For example, if two states had the same mean, but different variance, 
+#  what state is a value equal to the mean more likely to come from? Because of the increased variance of the one state, it is less likely to emit 
+#  values close to its mean.  This kind of makes sense in the case where the variance of a state is informative.  However, take a second example:
+#  state A has mean 0, SD=1, and state B has mean 1, SD=20.  Here, P(x=1) is much greater for state A than state B because of the vast difference in SD.
+# Since the values of adjacent bases are not independent of one another, a whole string of 1s will greatly favour state A. Since adjacent bases are not
+#  independent of one another (because reads span more than one base and few, if any, methods are truly single BP resolution, this is a likely scenario.
+# Thus, dividing by the max of the PDF (subtracting the log(max(PDF(x)))) is equivalent to dividing the PDF by 1/(sigma*sqroot(2)*pi), making the PDF
+#  exp(-(x-mu)^2/(2*sigma^2). Note that this transformation means that the AUPDF now increases with increasing variance.
+# However, this also means that states with extreme variance can dominate predictions because there is little penalty from being far from the mean.
+# I tried both ways and using the standard PDF seemed to work better. Scaling results in a large number of states being created.
