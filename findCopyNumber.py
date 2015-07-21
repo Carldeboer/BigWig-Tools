@@ -3,7 +3,7 @@
 #!/home/unix/cgdeboer/bin/python3
 
 
-#import sys; sys.argv= "findCopyNumber.py  -i example_input_CopyNumber.txt -o test_CNV -c /home/unix/cgdeboer/genomes/sc/20110203_R64/chrom.sizes -x -300 -b 0.001 -s 1 -v -v -v -w".split();
+#import sys; sys.argv= "findCopyNumber.py  -i example_input_CopyNumber3.txt -o test_MNase3-5_rawPDF_x300 -c /home/unix/cgdeboer/genomes/sc/20110203_R64/chrom.sizes -x -300 -b 0.001 -s 1 -v -v -v -w".split();
 
 import argparse
 parser = argparse.ArgumentParser(description='This program takes GB tracks as input and decomposes them using either PCA or NMF, outputting the components.')
@@ -261,9 +261,9 @@ for i in range(0,args.iterations):
 					if args.verbose>2: sys.stderr.write("      Local ploidy for %s:%i-%i i=(%i-%i)*%i (len=%ibp) better fit by %i, empirically equal to %f (rounded to %i).\n"%(chr,changeStart*args.sample,(j-1)*args.sample,changeStart,j-1,args.sample,(j-changeStart)*args.sample,stateIsToCNVs[viterbi[chr][j-1]],localPloidy,int(np.round(localPloidy))));
 					#re-assign viterbi to have be this (potentially new) state
 					localPloidy = int(np.round(localPloidy));
-					if localPloidy==args.ploidy and not warned:
-						warned=True;
-						sys.stderr.write("WARNING: Local ploidy rounds to global ploidy; transition log-probability (%f) is probably too high\n"%(args.transition));
+					#if localPloidy==args.ploidy and not warned:
+					#	warned=True;
+					#	sys.stderr.write("WARNING: Local ploidy rounds to global ploidy; transition log-probability (%f) is probably too high\n"%(args.transition));
 					else: 
 						curNumCNVs+=1;
 					if localPloidy not in cnvsToStateIs:
@@ -284,8 +284,8 @@ for i in range(0,args.iterations):
 	usedStates = np.unique(np.append(np.array([0,1]),np.unique(viterbiCat))).astype(int);
 	numStates = len(usedStates);
 	sys.stderr.write("Last iteration had %i CNVs and changed at %i positions; now have %i CNV states\n"%(curNumCNVs, noChange, numStates));
-	#if noChange==0: #no chr was updated
-	#	break;
+	if noChange==0: #no chr was updated
+		break;
 	#redefine standard ploidy
 	meanNormal = np.mean(allDataCat[viterbiCat==cnvsToStateIs[args.ploidy],:],axis=0)
 	covNormal = np.cov(allDataCat[viterbiCat==cnvsToStateIs[args.ploidy],:],rowvar=0)
@@ -295,6 +295,7 @@ for i in range(0,args.iterations):
 	for s in range(0,numStates):
 		cnvsToStateIsNew[stateIsToCNVs[usedStates[s]]]=s;
 		stateIsToCNVsNew[s]=stateIsToCNVs[usedStates[s]];
+		statesOldToNew[usedStates[s]]=s;
 	cnvsToStateIs=cnvsToStateIsNew;
 	stateIsToCNVs =stateIsToCNVsNew;
 	stateMeans = [0]*numStates;
@@ -323,6 +324,9 @@ for i in range(0,args.iterations):
 	model.covars_ = stateCovs;
 
 
+statesOldToNew = {}
+for s in range(0,numStates):
+	statesOldToNew[usedStates[s]]=s;
 
 
 sys.stderr.write("Finished in %i/%i iterations, yielding %i CNVs\n"%(i+1, args.iterations, curNumCNVs));
@@ -347,7 +351,7 @@ for chr in chrOrder:
 	try:		
 		nBytes = outStream.write("variableStep chrom=%s span=%i\n"%(chr,args.sample))
 		for i in range(0,len(lastClass[chr])):
-			nBytes = outStream.write("%i\t%i\n"%(useThese[chr][i]+1,stateIsToCNVs[lastClass[chr][i]]));
+			nBytes = outStream.write("%i\t%i\n"%(useThese[chr][i]+1,stateIsToCNVs[statesOldToNew[lastClass[chr][i]]])); #lastClass -> new stateIs -> CNVs
 		outStream.flush();
 	except IOError as e:
 		sys.stderr.write("IOError on %s, component %i\n"%(chr,i))
