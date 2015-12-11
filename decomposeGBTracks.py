@@ -3,23 +3,22 @@
 #!/home/unix/cgdeboer/bin/python3
 
 
-#import sys; sys.argv= "decomposeGBTracks.py -a NMF  -i test_samples.txt -o test_NMF -c /home/unix/cgdeboer/genomes/sc/20110203_R64/chrom.sizes -x 2 -v -v -v -w".split();
+#import sys; sys.argv= "decomposeGBTracks.py -a ICA  -i test_samples.txt -o test_ICA -c /home/unix/cgdeboer/genomes/sc/20110203_R64/chrom.sizes -x 2 -v -v -v".split();
 
 import argparse
-parser = argparse.ArgumentParser(description='This program takes GB tracks as input and decomposes them using either PCA or NMF, outputting the components.')
-parser.add_argument('-i',dest='inFP',	metavar='<inFile>',help='Input file containing a list of files, one per line with the following format, tab separated: \n<ID>\t<filePath>\t<gaussianSmoothingSD>\t<isOpen>\t<defaultValue>\t<doLog?>\n  where <isOpen> is 1 for openness tracks (e.g. FAIRE, DHS, ATAC-seq) and -1 for occupancy (e.g. nucleosomes)\n  and <doLog> is the number you want added to the data before log transform, or a negative number  otherwise', required=True);
+parser = argparse.ArgumentParser(description='This program takes GB tracks as input and decomposes them using either PCA, ICA, or NMF, outputting the components.')
+parser.add_argument('-i',dest='inFP',	metavar='<inFile>',help='Input file containing a list of files, one per line with the following format, tab separated: \n<ID>\t<filePath>\t<gaussianSmoothingSD>\t<defaultValue>\t<doLog?>\n where <doLog> is the number you want added to the data before log transform, or a negative number  otherwise', required=True);
 parser.add_argument('-c',dest='chrsFile', metavar='<chrom.sizes>',help='A chrom.sizes file contiaining the sizes for all the chromosomes you want output', required=True);
 parser.add_argument('-o',dest='outFPre', metavar='<outFilePre>',help='Where to output results, prefix [default=stdout]\n  Multiple files will be created, including a BW track, and diagnostics showing the clustering of data', required=False);
 parser.add_argument('-l',dest='logFP', metavar='<logFile>',help='Where to output errors/warnings [default=stderr]', required=False);
 parser.add_argument('-s',dest='sample', metavar='<sampleFrac>',help='The fraction of data points to use [default=0.01]', required=False, default = 0.01);
-parser.add_argument('-a',dest='approach', metavar='<approach>',help='Approach to use; on eof {PCA,NMF} [default=PCA]', required=False, default = 'PCA');
+parser.add_argument('-a',dest='approach', metavar='<approach>',help='Approach to use; on eof {PCA,NMF,ICA} [default=PCA]', required=False, default = 'PCA');
 parser.add_argument('-t',dest='iterations', metavar='<numIterations>',help='The number of iterations of NMF [default=1000]', required=False, default = 1000);
 parser.add_argument('-r',dest='scaleTo', metavar='<scaleRangeTo>',help='How to scale the range of each track (none|SD|mean|max|median) [default=SD]', required=False, default="SD");
-parser.add_argument('-x',dest='components', metavar='<numComponents>',help='The number of components to output [for PCA, defaults to all significant; required for NMF]', required=False,default=-1);
+parser.add_argument('-x',dest='components', metavar='<numComponents>',help='The number of components to output [for PCA, defaults to all significant; required for NMF and ICA]', required=False,default=-1);
 parser.add_argument('-k',dest='chunks', metavar='<chunkSize>',help='The size of the chunks (in bp) to read/write when outputting [default=500000]', default=500000, required=False);
 parser.add_argument('-d',dest='dim', metavar='<graphDim>',help='Inches per graph [default=3]', required=False, default = 3);
 parser.add_argument('-e',dest='eliminateMissing', action='count',help='eliminate base pairs with missing values; often, these represent 0s, so this is not always appropriate', required=False, default=0);
-parser.add_argument('-w',dest='wigs', action='count',help='Output to wigs first? Useful if RAM is limiting.  Sometimes wigToBigWig gets killed for it and its less RAM intensive to convert everything at the end', required=False, default=0);
 parser.add_argument('-v',dest='verbose', action='count',help='Verbose output?', required=False, default=0);
 args = parser.parse_args();
 
@@ -47,8 +46,8 @@ args.components = int(args.components);
 args.chunks = int(args.chunks);
 args.scaleTo = args.scaleTo.upper();
 
-if args.approach=="NMF" and args.components==-1:
-	raise Exception("components has no default for NMF - must specify with -x");
+if args.approach!="PCA" and args.components==-1:
+	raise Exception("components has no default for NMF/ICA - must specify with -x");
 
 if (args.logFP is not None):
 	logFile=MYUTILS.smartGZOpen(args.logFP,'w');
@@ -97,6 +96,7 @@ for chr in chrOrder:
 allData = np.empty([totalLength,len(IDs)]);
 if args.eliminateMissing>0:
 	keepThese = np.ones([totalLength]).astype(bool); # onlt those for which data was observed in all tracks
+
 for i in range(0,len(IDs)):
 	#input GB tracks
 	curBW = BigWigFile(open(files[i]))
@@ -148,6 +148,7 @@ if args.eliminateMissing>0:
 	totalLength=np.sum(keepThese);
 	allData = allData[keepThese,:];
 	if args.verbose>0: sys.stderr.write("Selected %i, ended up with %i, will only keep %i for missing data.\n"%(totalLength,allData.shape[0], np.sum(keepThese)));
+
 dataMedians = np.median(allData,axis=0);
 sys.stderr.write("Decomposing data based on %i sampled values\n"%(allData.shape[0]))
 
@@ -166,7 +167,20 @@ else:
 	raise Exception("Unrecognized scale: %s\n"%(args.scaleTo));
 
 
-if args.approach=="NMF":
+if args.approach=="ICA":
+	np.divide(allData, np.array([scaleTo,]*allData.shape[0]), allData);# -> allData
+	myDecomp = decomposition.FastICA(n_components=args.components, whiten=True, max_iter=args.iterations);
+	myDecomp.fit(allData);
+	W = myDecomp.mixing_;
+	W = np.transpose(W);
+	compFile = open("%s_ica_mix.txt"%(args.outFPre),"w");
+	compFile.write("track\tcomponent_"+"\tcomponent_".join(map(str, range(0,args.components)))+"\n");
+	for i in range(0,len(IDs)):
+		compFile.write(IDs[i]+"\t"+"\t".join(map(str,W[:,i]))+"\n");
+	
+	compFile.close()
+
+elif args.approach=="NMF":
 	np.divide(allData, np.array([scaleTo,]*allData.shape[0]), allData);# -> allData
 	#TODO: check for negative values and die if they are present, telling user which data have negative values
 	#n_components = number of components to keep
@@ -298,18 +312,10 @@ for i in range(0,len(IDs)):
 
 sys.stderr.write("Making output streams\n");
 
-allOutBWs = []
 outStreams = [];
 for i in range(0, args.components):
-	if args.wigs>0:
-		if args.verbose>1: sys.stderr.write("Making wig output file:  %s_comp%i.wig.gz.\n"%(args.outFPre,i+1));
-		outStreams.append( MYUTILS.smartGZOpen("%s_comp%i.wig.gz"%(args.outFPre,i+1),"w") );
-	else:
-		if args.verbose>1: sys.stderr.write("Making wig->bigwig pipe for output file:  %s_comp%i.bw.\n"%(args.outFPre,i+1));
-		toBW = subprocess.Popen(["wigToBigWig","stdin",args.chrsFile,"%s_comp%i.bw"%(args.outFPre,i+1)], stdin=subprocess.PIPE)
-		#toBW = subprocess.Popen(["wigToBigWig","stdin",args.chrsFile,"%s_comp%i.bw"%(args.outFPre,i)], bufsize = -1, stdin=subprocess.PIPE)
-		allOutBWs.append(toBW);
-		outStreams.append(toBW.stdin);
+	if args.verbose>1: sys.stderr.write("Making wig output file:  %s_comp%i.wig.gz.\n"%(args.outFPre,i+1));
+	outStreams.append( MYUTILS.smartGZOpen("%s_comp%i.wig.gz"%(args.outFPre,i+1),"w") );
 
 for i in range(0, args.components):
 	outStreams[i].write("track type=wiggle_0\n")
@@ -356,29 +362,20 @@ for chr in chrOrder:
 
 sys.stderr.write("Output all data.\n");
 
-if args.wigs>0:
-	for i in range(0,args.components):
-		outStreams[i].close()
-		toBW = subprocess.Popen(["wigToBigWig","%s_comp%i.wig.gz"%(args.outFPre,i+1),args.chrsFile,"%s_comp%i.bw"%(args.outFPre,i+1)])
-		temp = toBW.communicate()
-		if temp[0] is not None:
-			sys.stderr.write("component %i : %s"%(i+1,temp[0]));
-		if temp[1] is not None:
-			sys.stderr.write("component %i : %s"%(i+1,temp[1]));
-		if temp[0] is None and temp[1] is None: # if no errors, delete the original
-			os.remove("%s_comp%i.wig.gz"%(args.outFPre,i+1))
-else: #streams are pipes to wigToBigWig
-	for i in range(0,args.components):
-		allOutBWs[i].stdin.close();
+for i in range(0,args.components):
+	outStreams[i].close()
+	toBW = subprocess.Popen(["wigToBigWig","%s_comp%i.wig.gz"%(args.outFPre,i+1),args.chrsFile,"%s_comp%i.bw"%(args.outFPre,i+1)])
+	temp = toBW.communicate()
+	if temp[0] is not None:
+		sys.stderr.write("component %i : %s"%(i+1,temp[0]));
+	if temp[1] is not None:
+		sys.stderr.write("component %i : %s"%(i+1,temp[1]));
+	if temp[0] is None and temp[1] is None and os.path.isfile("%s_comp%i.bw"%(args.outFPre,i+1)): # if no errors, delete the original
+		os.remove("%s_comp%i.wig.gz"%(args.outFPre,i+1))
+	else:
+		sys.stderr.write("Left %s_comp%i.bw because of error "%(args.outFPre,i+1));
 
-	for i in range(0,args.components):
-		temp = allOutBWs[i].communicate()
-		if temp[0] is not None:
-			sys.stderr.write("component %i : %s"%(i+1,temp[0]));
-		if temp[1] is not None:
-			sys.stderr.write("component %i : %s"%(i+1,temp[1]));
-
-	if args.verbose>0: sys.stderr.write("Successfully closed wigToBigWig processes.\n");
+if args.verbose>0: sys.stderr.write("Successfully closed wigToBigWig processes.\n");
 
 if (args.logFP is not None):
 	logFile.close();

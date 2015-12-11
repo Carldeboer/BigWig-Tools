@@ -7,7 +7,7 @@
 
 import argparse
 parser = argparse.ArgumentParser(description='This program takes GB tracks as input and decomposes them using either PCA or NMF, outputting the components.')
-parser.add_argument('-i',dest='inFP',	metavar='<inFile>',help='Input file containing a list of files, one per line with the following format, tab separated: \n<ID>\t<filePath>\t<gaussianSmoothingSD>\t<isOpen>\t<defaultValue>\t<doLog?>\n  where <isOpen> is 1 for openness tracks (e.g. FAIRE, DHS, ATAC-seq) and -1 for occupancy (e.g. nucleosomes)\n  and <doLog> is the number you want added to the data before log transform, or a negative number  otherwise', required=True);
+parser.add_argument('-i',dest='inFP',	metavar='<inFile>',help='Input file containing a list of files, one per line with the following format, tab separated: \n<ID>\t<filePath>\t<gaussianSmoothingSD>\t<defaultValue>\t<doLog?>\n where <doLog> is the number you want added to the data before log transform, or a negative number  otherwise', required=True);
 parser.add_argument('-c',dest='chrsFile', metavar='<chrom.sizes>',help='A chrom.sizes file contiaining the sizes for all the chromosomes you want output', required=True);
 parser.add_argument('-o',dest='outFPre', metavar='<outFilePre>',help='Where to output results, prefix [default=stdout]\n  Multiple files will be created, including a BW track, and diagnostics showing the clustering of data', required=False);
 parser.add_argument('-l',dest='logFP', metavar='<logFile>',help='Where to output errors/warnings [default=stderr]', required=False);
@@ -16,10 +16,11 @@ parser.add_argument('-t',dest='iterations', metavar='<numIterations>',help='The 
 parser.add_argument('-p',dest='ploidy', metavar='<defaultPloidy>',help='The default ploidy (usually 1 for haploid, 2 for diploid) [default=1]', required=False,default=1);
 parser.add_argument('-x',dest='transition', metavar='<log10TransitionP>',help='The log10(P(transition)) between states [default=-100]; more negative is more conservative (calls fewer CNVs) - more resolution (lower -s <sample>) requires a more negative transition', required=False,default=-100);
 parser.add_argument('-b',dest='fractionBG', metavar='<backgroundAlignmentPct>',help='the fraction of the covariance of the standard ploidy state to use for the null state (no copies) - shouldn\'t be 0 since reads may align by chance [default=0.001]', required=False,default=0.001);
+parser.add_argument('-r',dest='standardPrior', metavar='<standardPloidyPrior>',help='The prior (in log probability) preference for the default (as specified by -p) state [default=-1]', required=False,default=-0.1);
 #parser.add_argument('-d',dest='dim', metavar='<graphDim>',help='Inches per graph [default=3]', required=False, default = 3);
 parser.add_argument('-z',dest='scalePDF', action='count',help='Scale the state PDFs to have a max of 1; this has the effect of making variance less important than means and often results in a larger number of more specific states.', required=False, default=0);
 parser.add_argument('-e',dest='eliminateMissing', action='count',help='eliminate base pairs with missing values; often, these represent 0s, so this is not always appropriate', required=False, default=0);
-parser.add_argument('-w',dest='wigs', action='count',help='Output to wigs first? Useful if RAM is limiting.  Sometimes wigToBigWig gets killed for it and its less RAM intensive to convert everything at the end', required=False, default=0);
+parser.add_argument('-ns',dest='notSumSamples', action='count',help='Do not sum adjacent data points when sampling data [e.g. if sample is 10, the first base will sum 1:10]', required=False, default=0);
 parser.add_argument('-v',dest='verbose', action='count',help='Verbose output?', required=False, default=0);
 args = parser.parse_args();
 
@@ -48,6 +49,7 @@ args.sample = int(args.sample);
 args.iterations = int(args.iterations);
 args.fractionBG = float(args.fractionBG);
 args.transition = float(args.transition);
+args.standardPrior = float(args.standardPrior);
 args.ploidy = int(args.ploidy);
 
 
@@ -94,7 +96,7 @@ if args.eliminateMissing>0:
 
 for chr in chrOrder:
 	#sample positions
-	useThese[chr] = np.arange(0,chromSizes[chr]-1,args.sample,int)
+	useThese[chr] = np.arange(0,np.floor(chromSizes[chr]/args.sample)*args.sample,args.sample,int) #skip the last position since it will have incomplete data
 	totalLength = totalLength + useThese[chr].shape[0];
 	allData[chr] = np.empty([useThese[chr].shape[0],len(IDs)]);
 	if args.eliminateMissing>0:
@@ -113,9 +115,10 @@ for i in range(0,len(IDs)):
 		if args.verbose>2: sys.stderr.write("    Getting data from BW.\n");
 		values = curBW.get_as_array( chr, 0, chromSizes[chr] )
 		if values is None:
-			sys.stderr.write("%s is missing %s... skipping it for all\n"%(IDs[i],chr));
+			sys.stderr.write("%s is missing %s... skipping it for all and removing %i from total length (now %i)\n"%(IDs[i],chr, len(useThese[chr]), totalLength -  useThese[chr].shape[0]));
 			chrOrder.remove(chr)
-			totalLength = totalLength -  np.sum(useThese[chr]);
+			#totalLength = totalLength -  np.sum(useThese[chr]);
+			totalLength = totalLength -  useThese[chr].shape[0];
 			del allData[chr]
 			if args.eliminateMissing>0:
 				del keepThese[chr];
@@ -143,14 +146,23 @@ for i in range(0,len(IDs)):
 			values = gaussian_filter(values, smoothings[i], mode='reflect', truncate=4.0)
 		#sample data
 		if args.verbose>2: sys.stderr.write("    Sampling data.\n");
+		if np.max(useThese[chr])>=len(values):
+			raise Exception("useThese[chr] contains indeces greater than len(values)! (%i vs %i)"%(np.max(useThese[chr]), len(values)));
 		#TODO: instead, calculate the mean of each sample range and take that
-		values = values [useThese[chr]]
+		mergedValues = values [useThese[chr]]
+		if args.notSumSamples==0:
+			for si in range(1,args.sample):
+				mergedSamples = values[useThese[chr]+si];
 		#append data;
 		if args.verbose>2: sys.stderr.write("    Appending data.\n");
-		allData[chr][:,i] = values;
-		curTot = curTot + len(values);
+		if allData[chr].shape[0]!=len(mergedValues):
+			raise Exception("mergedValues and allData[chr] are not of equal extent! (%i vs %i)"%(len(mergedValues), allData[chr].shape[0]));
+		allData[chr][:,i] = mergedValues;
+		curTot = curTot + len(mergedValues);
 
-allDataCat = np.empty([curTot,len(IDs)]);
+if curTot!=totalLength:
+	sys.stderr.write("curTot and totalLength are not of equal extent! (%i vs %i)\n"%(curTot,totalLength));
+allDataCat = np.empty([totalLength,len(IDs)]);
 curTot=0;
 for chr in chrOrder:
 	if args.eliminateMissing>0:
@@ -159,11 +171,13 @@ for chr in chrOrder:
 		useThese[chr] = useThese[chr][keepThese[chr]];
 	else:
 		curLen = allData[chr].shape[0];
+		sys.stderr.write("Cating allData: curLen=%i, curTot=%i, allData[chr].shape=%s, allDataCat.shape = %s\n"%(curLen, curTot, str(allData[chr].shape), str(allDataCat.shape)));
 		allDataCat[curTot:(curTot+curLen),:] = allData[chr];
 	curTot=curTot+curLen;
 
-if args.eliminateMissing>0:
-	allDataCat = allDataCat[0:curTot,:];
+sys.stderr.write("curTot=%i, totalLength=%i; resizing to curTot\n"%(curTot,totalLength));
+
+allDataCat = allDataCat[0:curTot,:];
 	
 
 if 0: #don't do this because it is non-linear and I can't assume that CNVs will scale linearly within the transformation
@@ -239,6 +253,8 @@ for i in range(0,args.iterations):
 		#3. Calculate Viterbi path given data
 		if args.verbose>2: sys.stderr.write("    i=%i; Calculating Viterbi path for %s.\n"%(i,chr));
 		framelogprob = model._compute_log_likelihood(allData[chr])
+		#sys.stderr.write("framelogprob dim: "+str(framelogprob.shape)+"\n");
+		framelogprob[:,cnvsToStateIs[args.ploidy]] = np.subtract(framelogprob[:,cnvsToStateIs[args.ploidy]], args.standardPrior); #add log(prior)
 		if args.scalePDF>0:
 			framelogprob = np.subtract(framelogprob,statePDFMaxima) #### This requires some explanation.  See Note 1 below. 
 		logprob, viterbi[chr] = model._do_viterbi_pass(framelogprob);
@@ -261,8 +277,8 @@ for i in range(0,args.iterations):
 					if args.verbose>2: sys.stderr.write("      Local ploidy for %s:%i-%i i=(%i-%i)*%i (len=%ibp) better fit by %i, empirically equal to %f (rounded to %i).\n"%(chr,changeStart*args.sample,(j-1)*args.sample,changeStart,j-1,args.sample,(j-changeStart)*args.sample,stateIsToCNVs[viterbi[chr][j-1]],localPloidy,int(np.round(localPloidy))));
 					#re-assign viterbi to have be this (potentially new) state
 					localPloidy = int(np.round(localPloidy));
-					#if localPloidy==args.ploidy and not warned:
-					#	warned=True;
+					if localPloidy==args.ploidy and not warned:
+						warned=True;
 					#	sys.stderr.write("WARNING: Local ploidy rounds to global ploidy; transition log-probability (%f) is probably too high\n"%(args.transition));
 					else: 
 						curNumCNVs+=1;
@@ -281,6 +297,8 @@ for i in range(0,args.iterations):
 		noChange = noChange + np.sum(viterbi[chr]!=lastClass[chr]);
 		lastClass[chr]=viterbi[chr]#update
 	#5. Re-calculate the means and SDs of each state given the revised viterbi path
+	#print(viterbiCat.dtype);
+	viterbitCat = viterbiCat.astype(int);
 	usedStates = np.unique(np.append(np.array([0,1]),np.unique(viterbiCat))).astype(int);
 	numStates = len(usedStates);
 	sys.stderr.write("Last iteration had %i CNVs and changed at %i positions; now have %i CNV states\n"%(curNumCNVs, noChange, numStates));
@@ -295,23 +313,29 @@ for i in range(0,args.iterations):
 	for s in range(0,numStates):
 		cnvsToStateIsNew[stateIsToCNVs[usedStates[s]]]=s;
 		stateIsToCNVsNew[s]=stateIsToCNVs[usedStates[s]];
-		statesOldToNew[usedStates[s]]=s;
 	cnvsToStateIs=cnvsToStateIsNew;
 	stateIsToCNVs =stateIsToCNVsNew;
 	stateMeans = [0]*numStates;
 	stateCovs = [0]*numStates;
 	statePDFMaxima = [0]*numStates;
 	for s in range(0,numStates):
+		if args.verbose>1: sys.stderr.write("  Calculating mean and covariance for state i=%i: CN-%i; have %i examples\n"%(s,stateIsToCNVs[s], np.sum(viterbiCat==usedStates[s])));
 		stateMeans[s] = meanNormal*(float(stateIsToCNVs[s])/args.ploidy);
-		if np.sum(viterbiCat==s)<3: # too few examples to estimate covar ## sometimes estimating the covariance emperically leads to some weird states defined more by covariance than anything else.
+		if np.sum(viterbiCat==usedStates[s])>=3: # too few examples to estimate covar ## sometimes estimating the covariance emperically leads to some weird states defined more by covariance than anything else.
+			stateCovs[s] = np.cov(allDataCat[viterbiCat==usedStates[s],:],rowvar=0)
+		redoCV = False;
+		try: #test if positive definite
+			temp = np.linalg.cholesky(stateCovs[s]);
+		except np.linalg.LinAlgError as e:
+			redoCV=True;
+		if np.sum(viterbiCat==usedStates[s])<3 or redoCV: # too few examples to estimate covar or variance was 0 for at least one ### sometimes estimating the covariance emperically leads to some weird states defined more by covariance than anything else.
+
 			# it appears to be better to estimate this from the empirical covariance (else, below) rather than the CNV* standard covariance as here
 			if float(stateIsToCNVs[s])==0:
 				stateCovs[s] = covNormal * args.fractionBG/args.ploidy; # since if the variance is 0, the probability of observing anything but the mean (0) is 0
 			else:
 				stateCovs[s] = covNormal * float(stateIsToCNVs[s])/args.ploidy;
 			stateCovs[s] = covNormal;
-		else:
-			stateCovs[s] = np.cov(allDataCat[viterbiCat==usedStates[s],:],rowvar=0)
 		statePDFMaxima[s]=np.log(multivariate_normal.pdf(x=stateMeans[s],mean=stateMeans[s],cov=stateCovs[s]))
 	model = GaussianHMM(numStates,covariance_type="full", n_iter=1);
 	if args.transition <= -100:
@@ -321,7 +345,11 @@ for i in range(0,args.iterations):
 		transitionMatrix = np.add(np.eye(numStates)*(1-(numStates-1)*10**args.transition),(1-np.eye(numStates))*10**args.transition);
 		model._set_transmat(transitionMatrix);
 	model.means_ = stateMeans;
-	model.covars_ = stateCovs;
+	try:
+		model.covars_ = stateCovs;
+	except ValueError as e:
+		print(stateCovs);
+		raise(e);
 
 
 statesOldToNew = {}
@@ -333,15 +361,9 @@ sys.stderr.write("Finished in %i/%i iterations, yielding %i CNVs\n"%(i+1, args.i
 
 sys.stderr.write("Making output streams\n");
 
-outBW = []
 outStream = [];
-if args.wigs>0:
-	if args.verbose>1: sys.stderr.write("Making wig output file:  %s.wig.gz.\n"%(args.outFPre));
-	outStream = MYUTILS.smartGZOpen("%s.wig.gz"%(args.outFPre),"w");
-else:
-	if args.verbose>1: sys.stderr.write("Making wig->bigwig pipe for output file:  %s.bw.\n"%(args.outFPre));
-	outBW = subprocess.Popen(["wigToBigWig","stdin",args.chrsFile,"%s.bw"%(args.outFPre)], stdin=subprocess.PIPE)
-	outStream = toBW.stdin;
+if args.verbose>1: sys.stderr.write("Making wig output file:  %s.wig.gz.\n"%(args.outFPre));
+outStream = MYUTILS.smartGZOpen("%s.wig.gz"%(args.outFPre),"w");
 
 nbytes = outStream.write("track type=wiggle_0\n");
 
@@ -355,30 +377,23 @@ for chr in chrOrder:
 		outStream.flush();
 	except IOError as e:
 		sys.stderr.write("IOError on %s, component %i\n"%(chr,i))
-		sys.stderr.write("If this is a broken pipe, try using the -w option\n")
 		raise(e);
 
 
-sys.stderr.write("Output all data.\n");
 
-if args.wigs>0:
-	outStream.close()
-	toBW = subprocess.Popen(["wigToBigWig","%s.wig.gz"%(args.outFPre),args.chrsFile,"%s.bw"%(args.outFPre)])
-	temp = toBW.communicate()
-	if temp[0] is not None:
-		sys.stderr.write("wigToBigWig: %s"%(temp[0]));
-	if temp[1] is not None:
-		sys.stderr.write("wigToBigWig: %s"%(temp[1]));
-	if temp[0] is None and temp[1] is None: # if no errors, delete the original
-		os.remove("%s.wig.gz"%(args.outFPre))
-else: #streams are pipes to wigToBigWig
-	outBW.stdin.close();
-	temp = outBW.communicate()
-	if temp[0] is not None:
-		sys.stderr.write("wigToBigWig: %s"%(temp[0]));
-	if temp[1] is not None:
-		sys.stderr.write("wigToBigWig: %s"%(temp[1]));
-	if args.verbose>0: sys.stderr.write("Successfully closed wigToBigWig processes.\n");
+outStream.close()
+toBW = subprocess.Popen(["wigToBigWig","%s.wig.gz"%(args.outFPre),args.chrsFile,"%s.bw"%(args.outFPre)])
+temp = toBW.communicate()
+if temp[0] is not None:
+	sys.stderr.write("wigToBigWig: %s"%(temp[0]));
+if temp[1] is not None:
+	sys.stderr.write("wigToBigWig: %s"%(temp[1]));
+if temp[0] is None and temp[1] is None and os.path.isfile("%s.bw"%(args.outFPre)): # if no errors, delete the original
+	os.remove("%s.wig.gz"%(args.outFPre))
+else:
+	sys.stderr.write("Left wig.gz because of error.");
+
+sys.stderr.write("Output all data.\n");
 
 if (args.logFP is not None):
 	logFile.close();

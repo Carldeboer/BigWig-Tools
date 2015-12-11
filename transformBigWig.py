@@ -7,13 +7,14 @@ parser = argparse.ArgumentParser(description='This program takes a BW file as in
 parser.add_argument('-i',dest='inBW',	metavar='<inBigWig>',help='Input bigwig file to translate', required=True);
 parser.add_argument('-f',dest='functions',	metavar='<functions>',help='Functions to apply to data\n  One or more of {log(2|10)|[+-^*/]<num>|(>=|<=|<|>|==|!=)<num>|smooth<SD>|exp|pow<num>|default<num>}; separated by commas. \n  log(2|10|) = apply log2, log10, or natural log;\n  [+-*/^]<num> = <data> <operation> <num>, where ^ is the exponent operator;\n  (>=|<=|<|>|==|!=)<num> = inequalities, thereby turning the data into 1s and 0s;\n  smoothG<num> = gaussian smooth, SD = <num>;\n  exp = e^data; \n  smoothU<num> = uniform (sliding window) smoothing with window = <num>;\n  smoothZ<num> = transform to Z scores, with SD and mean defined over window <num>/2 to either side of datum;\n  pow<num> = <num>^data;\n  default<num> = replace missing values with <num>;', required=True);
 parser.add_argument('-c',dest='chrsFile',	metavar='<chromSizesFile>',help='Input file containing the chromsome sizes: chr\\tsize\\n', required=True);
-parser.add_argument('-o',dest='outFP', metavar='<outFilePath>',help='Where to output results', required=True);
+parser.add_argument('-o',dest='outFPre', metavar='<outFilePrefix>',help='Where to output results', required=True);
 parser.add_argument('-l',dest='logFP', metavar='<logFile>',help='Where to output messages', required=False);
 parser.add_argument('-v',dest='verbose', action='count',help='Verbose output?', required=False, default=0);
 parser.add_argument('-k',dest='chunks', metavar='<chunkSize>',help='The size of the chunks (in bp) to read/write when outputting [default=500000]', default=500000, required=False);
 args = parser.parse_args();
 
 #import itertools
+import os
 import warnings
 import subprocess
 import MYUTILS
@@ -189,8 +190,9 @@ for line in chromSizesFile:
 
 curBW = BigWigFile(open(args.inBW))
 
-toBW = subprocess.Popen(["wigToBigWig","stdin",args.chrsFile,args.outFP], stdin=subprocess.PIPE)
-toBW.stdin.write("track type=wiggle_0\n")
+outStream = MYUTILS.smartGZOpen("%s.wig.gz"%(args.outFPre),"w");
+outStream.write("track type=wiggle_0\n")
+
 
 for chr in chromSizes.keys():
 	last = 0;
@@ -208,29 +210,26 @@ for chr in chromSizes.keys():
 				values = applyFunction(values,f);
 			values = values[(last - curSt):(curLast-last + (last-curSt))];# set them only to the middle part of this data so that the additionalFlankSize regions are not output.
 			#print(values.shape);
-			try:
-				if last==0:
-					toBW.stdin.write("fixedStep chrom=%s start=1 step=1\n"%(chr))
-				toBW.stdin.write("\n".join(map(str,values)));
-				toBW.stdin.write("\n");
-				toBW.stdin.flush();
-			except IOError as e:
-				sys.stderr.write("IOError on %s, component %i\n"%(chr,i))
-				sys.stderr.write("If this is a broken pipe, try reducing -k <chunks> from %i\n"%(args.chunks))
-				raise(e);
+			if last==0:
+				outStream.write("fixedStep chrom=%s start=1 step=1\n"%(chr))
+			outStream.write("\n".join(map(str,values)));
+			outStream.write("\n");
+			outStream.flush();
 		last=curLast;
 
-toBW.stdin.close();
-temp = toBW.communicate();
+outStream.close();
 
+toBW = subprocess.Popen(["wigToBigWig","%s.wig.gz"%(args.outFPre),args.chrsFile,"%s.bw"%(args.outFPre)])
+temp = toBW.communicate()
 if temp[0] is not None:
-	sys.stderr.write(temp[0]);
-
+	sys.stderr.write("wigToBigWig: %s"%(temp[0]));
 if temp[1] is not None:
-	sys.stderr.write(temp[1]);
+	sys.stderr.write("wigToBigWig: %s"%(temp[1]));
+if temp[0] is None and temp[1] is None and os.path.isfile("%s.bw"%(args.outFPre)): # if no errors, delete the original
+	os.remove("%s.wig.gz"%(args.outFPre))
+else:
+	sys.stderr.write("Left wig.gz because of error.");
 
-sys.stderr.write("Output all data!\n");
-#raise Exception("Reached bad state=%d for '%s.%d' '%s' at line '%s'" %(state,mid,ver,tfid,line));
 if (args.logFP is not None):
 	logFile.close();
 

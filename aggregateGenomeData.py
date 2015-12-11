@@ -1,14 +1,6 @@
 #!/broad/software/free/Linux/redhat_5_x86_64/pkgs/python_2.7.1-sqlite3-rtrees/bin/python2.7
-import warnings
-import MYMATH
-import MYUTILS
-import GENOMEDATA
-import sys
 import argparse
 
-from numpy import *
- 
-from bx.intervals.io import GenomicIntervalReader
 
 parser = argparse.ArgumentParser(description='This program retrieves the values of genome tracks that correspond to specific loci and outputs a value that is an aggregation function of the scores in that region.')
 parser.add_argument('-c',dest='lociFile',	metavar='<inGFF>',help='Input GFF file of loci to scan', required=True);
@@ -29,6 +21,14 @@ parser.add_argument('-v',dest='verbose', action='count',help='Verbose output?', 
 
 args = parser.parse_args();
 
+from numpy import *
+ 
+from bx.intervals.io import GenomicIntervalReader
+import warnings
+import MYMATH
+import MYUTILS
+import GENOMEDATA
+import sys
 
 if args.inBED>0:
 	scanThese = GENOMEDATA.BED(args.lociFile);
