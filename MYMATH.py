@@ -1,7 +1,7 @@
 import math
 import numpy
 
-def inputMatrix(inFile, inType = np.float):
+def inputMatrix(inFile, inType = numpy.float):
 	colNames = []
 	first=True;
 	nRows = 0;
@@ -15,15 +15,15 @@ def inputMatrix(inFile, inType = np.float):
 			colNames = data;
 		else:
 			nCols = len(data)-1;
-			if inType==np.str:
+			if inType==numpy.str:
 				for i in range(1,len(data)):
 					maxString = max(maxString,len(data[i]))
 			nRows+=1;
 	first=True;
-	if inType==np.str:
-		dataMatrix = np.empty((nRows,nCols), dtype = np.dtype('|S%i'%(maxString)));
+	if inType==numpy.str:
+		dataMatrix = numpy.empty((nRows,nCols), dtype = numpy.dtype('|S%i'%(maxString)));
 	else:
-		dataMatrix = np.empty((nRows,nCols), dtype = inType) 
+		dataMatrix = numpy.empty((nRows,nCols), dtype = inType) 
 	rowLabs = [""] * nRows
 	nRows = 0;
 	inFile.seek(0,0);
@@ -34,7 +34,7 @@ def inputMatrix(inFile, inType = np.float):
 			first=False;
 		else:
 			rowLabs[nRows] = data[0];
-			dataMatrix[nRows,:] = np.array([data[1:len(data)]]).astype(inType)
+			dataMatrix[nRows,:] = numpy.array([data[1:len(data)]]).astype(inType)
 			nRows+=1;
 	return (rowLabs, colNames, dataMatrix);
 
