@@ -1,5 +1,6 @@
 import math
 import numpy
+import MYUTILS
 
 def inputMatrix(inFile, inType = numpy.float):
 	colNames = []
