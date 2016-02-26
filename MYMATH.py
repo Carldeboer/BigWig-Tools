@@ -127,6 +127,26 @@ def reshapeData(curProfile,fStart,fEnd,desiredLength,func):
 		elif func=="MEAN":
 			thisMid[i] = thisMid[i]/theCounts[i];
 	return thisMid;
+
+def Angle2D(x1, y1, x2, y2):
+   theta1 = np.arctan2(y1,x1);
+   theta2 = np.arctan2(y2,x2);
+   dtheta = theta2 - theta1;
+   while (dtheta > np.pi):
+      dtheta -= 2*np.pi;
+   while (dtheta < -np.pi):
+      dtheta += 2*np.pi;
+   return(dtheta);
+
+def isInPolygon(polygonX, polygonY, pointsX, pointsY):
+    allInside = [];
+    for i in range(0,len(pointsX)):
+        angle=0;
+        for j in range(0,len(polygonX)):
+            angle += Angle2D(polygonX[j]-pointsX[i], polygonY[j]-pointsY[i],polygonX[(j+1)%len(polygonX)]-pointsX[i], polygonY[(j+1)%len(polygonX)]-pointsY[i]);
+        if (np.abs(angle) >= np.pi):
+            allInside.append(i)
+    return allInside;
 #
 #def reshapeDataAvg(curProfile,fStart,fEnd,desiredLength):
 #	#combines data by average
